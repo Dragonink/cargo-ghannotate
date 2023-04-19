@@ -1,6 +1,6 @@
 [package]
 name = "cargo-ghannotate"
-version = "1.1.0"
+version = "1.1.1"
 authors = ["Dragonink (https://github.com/Dragonink)"]
 description = "Tool to annotate GitHub Actions from the output of Cargo commands"
 readme = "README.md"

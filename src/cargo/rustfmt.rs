@@ -31,20 +31,23 @@ impl<'m> HandleMessage<'m> for Vec<FormatMismatches<'m>> {
 					.map(|mismatch| Annotation {
 						kind: AnnotationKind::Warning,
 						file: Cow::Borrowed(
-							mismatches.name.trim_start_matches(
-								std::env::current_dir()
-									.unwrap()
-									.as_os_str()
-									.to_str()
-									.unwrap(),
-							),
+							mismatches
+								.name
+								.trim_start_matches(
+									std::env::current_dir()
+										.unwrap()
+										.as_os_str()
+										.to_str()
+										.unwrap(),
+								)
+								.trim_start_matches('/'),
 						),
 						line: mismatch.original_begin_line,
 						end_line: Some(mismatch.original_end_line),
 						col: None,
 						end_column: None,
 						title: Some(Cow::Borrowed("Format mismatch")),
-						message: Cow::Owned(format!("```rust\n{}\n```", mismatch.expected)),
+						message: mismatch.expected,
 					})
 			})
 			.collect()
@@ -95,6 +98,7 @@ impl<'c> From<&'c FormatMismatches<'c>> for FormatMismatchesSummary {
 						.to_str()
 						.unwrap(),
 				)
+				.trim_start_matches('/')
 				.to_owned(),
 			lines: message
 				.mismatches
@@ -118,7 +122,7 @@ impl SummaryWriter for FormatMismatchSummaryWriter {
 		self.count += summary.lines.len();
 		writeln!(content, "- `{}`", summary.file)?;
 		for line in summary.lines {
-			writeln!(content, "  - {line}")?;
+			writeln!(content, "  - L{line}")?;
 		}
 		Ok(())
 	}

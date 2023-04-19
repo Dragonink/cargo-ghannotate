@@ -149,7 +149,11 @@ fn main() -> ExitCode {
 		}
 	}
 
-	if max_annotation >= annotation_threshold {ExitCode::FAILURE} else {ExitCode::SUCCESS}
+	if max_annotation >= annotation_threshold {
+		ExitCode::FAILURE
+	} else {
+		ExitCode::SUCCESS
+	}
 }
 
 /// Annotates GitHub Actions from the output of Cargo subcommands
