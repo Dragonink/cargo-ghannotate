@@ -1,6 +1,6 @@
 //! Provides structures and functions to annotate GitHub Actions
 
-use crate::cargo::{CargoMessage, DiagnosticLevel};
+use crate::cargo::DiagnosticLevel;
 use serde::Serialize;
 use std::{
 	borrow::Cow,
@@ -15,48 +15,19 @@ pub(crate) struct Annotation<'s> {
 	/// Kind of annotation
 	pub(crate) kind: AnnotationKind,
 	/// File to annotate
-	file: Cow<'s, str>,
+	pub(crate) file: Cow<'s, str>,
 	/// Start of the lines to annotate (1-based, inclusive)
-	line: usize,
+	pub(crate) line: usize,
 	/// End of the lines to annotate (1-based)
-	end_line: Option<usize>,
+	pub(crate) end_line: Option<usize>,
 	/// Start of the columns to annotate (1-based, inclusive)
-	col: Option<usize>,
+	pub(crate) col: Option<usize>,
 	/// End of the lines to annotate (1-based)
-	end_column: Option<usize>,
+	pub(crate) end_column: Option<usize>,
 	/// Annotation title
-	title: Option<Cow<'s, str>>,
+	pub(crate) title: Option<Cow<'s, str>>,
 	/// Annotation message
-	message: Cow<'s, str>,
-}
-impl<'c> TryFrom<CargoMessage<'c>> for Annotation<'c> {
-	type Error = &'static str;
-
-	fn try_from(message: CargoMessage<'c>) -> Result<Self, Self::Error> {
-		match message {
-			CargoMessage::CompilerMessage(message) => {
-				let primary_span = message
-					.spans
-					.iter()
-					.find(|span| span.is_primary)
-					.ok_or("Missing primary span")?;
-
-				Ok(Self {
-					kind: message.level.into(),
-					file: Cow::Borrowed(primary_span.file_name),
-					line: primary_span.line_start,
-					end_line: Some(primary_span.line_end),
-					col: Some(primary_span.column_start),
-					end_column: Some(primary_span.column_end),
-					title: message
-						.rendered
-						.as_ref()
-						.map(|_rendered| Cow::Borrowed(message.message)),
-					message: message.rendered.unwrap_or(Cow::Borrowed(message.message)),
-				})
-			}
-		}
-	}
+	pub(crate) message: Cow<'s, str>,
 }
 impl<'s> Annotation<'s> {
 	/// Clones `self` such that all strings are owned
@@ -137,7 +108,9 @@ impl From<DiagnosticLevel> for AnnotationKind {
 		match level {
 			DiagnosticLevel::Error | DiagnosticLevel::InternalCompilerError => Self::Error,
 			DiagnosticLevel::Warning => Self::Warning,
-			_ => Self::Notice,
+			DiagnosticLevel::Note | DiagnosticLevel::Help | DiagnosticLevel::FailureNote => {
+				Self::Notice
+			}
 		}
 	}
 }

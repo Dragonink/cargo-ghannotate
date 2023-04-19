@@ -1,66 +1,68 @@
 //! Provides structures to parse Cargo JSON data
 
-use serde::Deserialize;
-use std::borrow::Cow;
+use crate::github::Annotation;
+use std::{
+	fmt::{self, Write as FmtWrite},
+	io::{self, Write as IoWrite},
+};
 
-/// Message outputted by Cargo
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "reason", content = "message", rename_all = "kebab-case")]
-pub(crate) enum CargoMessage<'c> {
-	/// Message outputted by rustc
-	#[serde(borrow)]
-	CompilerMessage(Diagnostic<'c>),
-}
+/// Converts this struct into a [`Vec<Annotation>`] and a [`Vec<Summary>`]
+pub(crate) trait HandleMessage<'m> {
+	/// Type used to store summary data
+	type Summary;
 
-/// rustc's diagnostic message
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct Diagnostic<'c> {
-	/// Primary message
-	pub(crate) message: &'c str,
-	/// Severity of the diagnostic
-	pub(crate) level: DiagnosticLevel,
-	/// Locations in the source code of this diagnostic
-	#[serde(borrow)]
-	pub(crate) spans: Vec<DiagnosticSpan<'c>>,
-	/// Diagnostic as rendered by rustc
-	#[serde(borrow)]
-	pub(crate) rendered: Option<Cow<'c, str>>,
-}
+	/// Converts `self` into a list of [`Annotation`]
+	fn into_annotations(self) -> Vec<Annotation<'m>>;
 
-/// Severity of a [`Diagnostic`]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum DiagnosticLevel {
-	/// A fatal error that prevents compilation
-	Error,
-	/// A possible error of concern
-	Warning,
-	/// Additional information or context about the diagnostic
-	Note,
-	/// A suggestion on how to resolve the diagnostic
-	Help,
-	/// A note attached to the message for further information
-	FailureNote,
-	/// Indicates a bug within the compiler
-	#[serde(rename = "error: internal compiler error")]
-	InternalCompilerError,
-}
-
-/// The location of a diagnostic in the source code
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub(crate) struct DiagnosticSpan<'c> {
-	/// The file where the span is located
+	/// Extracts summaries
 	///
-	/// This path may not exist or may point to the source of an external crate.
-	pub(crate) file_name: &'c str,
-	/// The first line number of the span (1-based, inclusive)
-	pub(crate) line_start: usize,
-	/// The last line number of the span (1-based, inclusive)
-	pub(crate) line_end: usize,
-	/// The first column number of the span (1-based, inclusive)
-	pub(crate) column_start: usize,
-	/// The last column number of the span (1-based, exclusive)
-	pub(crate) column_end: usize,
-	/// This span is the "primary" span
-	pub(crate) is_primary: bool,
+	/// The default implementation is [`unimplemented!`].
+	fn summarize(&self) -> Vec<Self::Summary> {
+		unimplemented!()
+	}
 }
+
+/// Enables types to be written as job summaries
+pub(crate) trait SummaryWriter: Sized {
+	/// Type used to store summary data
+	type Summary;
+
+	/// Writes the given `summary`
+	fn write_summary(&mut self, summary: Self::Summary, content: &mut dyn FmtWrite) -> fmt::Result;
+
+	#[allow(unused_variables)]
+	/// Writes the preamble
+	///
+	/// This function is meant to be called after all calls to [`write_summary`](Self::write_summary).
+	#[inline]
+	fn write_preamble(&self, file: &mut dyn IoWrite) -> io::Result<()> {
+		Ok(())
+	}
+
+	#[allow(unused_variables)]
+	/// Writes the "postamble"
+	///
+	/// This function is meant to be called after all calls to [`write_summary`](Self::write_summary).
+	#[inline]
+	fn write_postamble(self, file: &mut dyn IoWrite) -> io::Result<()> {
+		Ok(())
+	}
+}
+impl SummaryWriter for () {
+	type Summary = ();
+
+	#[inline]
+	fn write_summary(
+		&mut self,
+		_summary: Self::Summary,
+		_content: &mut dyn FmtWrite,
+	) -> fmt::Result {
+		Ok(())
+	}
+}
+
+mod rustc;
+mod rustfmt;
+
+pub(crate) use self::rustfmt::*;
+pub(crate) use rustc::*;

@@ -66,19 +66,26 @@
 
 use clap::{Args, Parser, Subcommand, ValueHint};
 use std::{
-	collections::{BTreeSet, HashMap},
+	collections::BTreeSet,
 	ffi::OsString,
-	fmt::Write as FmtWrite,
 	fs::File,
 	io::{self, BufRead, Cursor, Write as IoWrite},
 	process::{Command, ExitCode, Output, Stdio},
 };
 
+/// Environment variable containing the path to the special summary file
+const SUMMARY_PATH_VAR: &str = "GITHUB_STEP_SUMMARY";
+/// Path to the summary file used in debug contexts
+const DEBUG_SUMMARY_PATH: &str = "SUMMARY.md";
+
 mod cargo;
 mod github;
 
-use cargo::{CargoMessage, Diagnostic, DiagnosticLevel};
-use github::{Annotation, AnnotationKind};
+use cargo::{
+	Diagnostic, DiagnosticSummaryWriter, FormatMismatchSummaryWriter, FormatMismatches,
+	HandleMessage, SummaryWriter,
+};
+use github::AnnotationKind;
 
 fn main() -> ExitCode {
 	let cli = Cli::parse_from(std::env::args_os().filter(|arg| arg != "ghannotate"));
@@ -91,28 +98,58 @@ fn main() -> ExitCode {
 	let mut max_annotation = AnnotationKind::Notice;
 
 	let cargo = cli.invoke_cargo().expect("Cargo invocation failed");
-	let mut summaries = Vec::new();
-	let mut annotations = BTreeSet::new();
+	let mut annotations_buf = BTreeSet::new();
 	let mut stdout = io::stdout().lock();
-	for line in Cursor::new(cargo.stdout).lines() {
-		if let Ok(message) = serde_json::from_str::<CargoMessage>(&line.unwrap()) {
-			let summary = Summary::from(&message);
-			if let Ok(annotation) = Annotation::try_from(message) {
-				if annotations.insert(annotation.to_owned()) {
-					writeln!(stdout, "{annotation}").unwrap();
-					max_annotation = max_annotation.max(annotation.kind);
-					summaries.push(summary);
+	let mut summary_content = String::new();
+	/// Common code for all messages
+	macro_rules! handle_message {
+		($parse:expr, $summary_writer:ty) => {{
+			let mut summary_writer = <$summary_writer>::default();
+			for line in Cursor::new(cargo.stdout).lines() {
+				let line = line.unwrap();
+				let line = line.as_str();
+				if let Ok(message) = $parse(line) {
+					let summaries = message.summarize();
+					let mut write_summaries = false;
+					for annotation in message.into_annotations() {
+						if annotations_buf.insert(annotation.to_owned()) {
+							writeln!(stdout, "{annotation}").unwrap();
+							max_annotation = max_annotation.max(annotation.kind);
+							write_summaries = true;
+						}
+					}
+					if write_summaries {
+						summaries.into_iter().for_each(|summary| {
+							summary_writer
+								.write_summary(summary, &mut summary_content)
+								.unwrap();
+						});
+					}
 				}
 			}
+			if let Some(mut file) = std::env::var_os(SUMMARY_PATH_VAR)
+				.or(cfg!(debug_assertions).then(|| OsString::from(DEBUG_SUMMARY_PATH)))
+				.and_then(|path| File::create(path).ok())
+			{
+				summary_writer.write_preamble(&mut file).unwrap();
+				file.write_all(summary_content.as_bytes()).unwrap();
+				summary_writer.write_postamble(&mut file).unwrap();
+			}
+		}};
+	}
+	match cli.command {
+		CliCommand::Check(_) | CliCommand::Clippy(_) | CliCommand::Build(_) => {
+			handle_message!(serde_json::from_str::<Diagnostic>, DiagnosticSummaryWriter);
+		}
+		CliCommand::Fmt(_) => {
+			handle_message!(
+				serde_json::from_str::<Vec<FormatMismatches>>,
+				FormatMismatchSummaryWriter
+			);
 		}
 	}
-	write_summaries(summaries).unwrap();
 
-	if max_annotation >= annotation_threshold {
-		ExitCode::FAILURE
-	} else {
-		ExitCode::SUCCESS
-	}
+	if max_annotation >= annotation_threshold {ExitCode::FAILURE} else {ExitCode::SUCCESS}
 }
 
 /// Annotates GitHub Actions from the output of Cargo subcommands
@@ -120,12 +157,13 @@ fn main() -> ExitCode {
 #[command(author, version, about, long_about = None)]
 #[command(override_usage = "cargo ghannotate check [OPTIONS] [ARGS]...\n       \
 	cargo ghannotate clippy [OPTIONS] [ARGS]...\n       \
-	cargo ghannotate build [OPTIONS] [ARGS]...")]
+	cargo ghannotate build [OPTIONS] [ARGS]...\n       \
+	cargo ghannotate fmt [OPTIONS] [ARGS]...")]
 struct Cli {
 	/// Path to the `cargo` executable
 	#[arg(long, env = "CARGO", value_name = "PATH", value_hint = ValueHint::ExecutablePath)]
 	cargo: OsString,
-	/// Should warnings be raised, they would not cause the job to fail
+	/// If warnings were to be raised, they would not cause the job to fail
 	#[arg(long)]
 	allow_warnings: bool,
 	/// Cargo subcommand
@@ -139,17 +177,39 @@ impl Cli {
 		#[allow(clippy::enum_glob_use)]
 		use CliCommand::*;
 
-		Command::new(&self.cargo)
-			.arg(match self.command {
-				Check(_) => "check",
-				Clippy(_) => "clippy",
-				Build(_) => "build",
-			})
-			.args(self.command.as_ref().as_ref())
-			.arg("--message-format=json")
-			.stdin(Stdio::null())
-			.stderr(Stdio::inherit())
-			.output()
+		match self.command {
+			Check(_) => {
+				let mut command = Command::new(&self.cargo);
+				command
+					.args(["check", "--message-format=json"])
+					.args(self.command.as_ref().as_ref());
+				command
+			}
+			Clippy(_) => {
+				let mut command = Command::new(&self.cargo);
+				command
+					.args(["clippy", "--message-format=json"])
+					.args(self.command.as_ref().as_ref());
+				command
+			}
+			Build(_) => {
+				let mut command = Command::new(&self.cargo);
+				command
+					.args(["build", "--message-format=json"])
+					.args(self.command.as_ref().as_ref());
+				command
+			}
+			Fmt(_) => {
+				let mut command = Command::new("rustup");
+				command
+					.args(["run", "nightly", "cargo", "fmt", "--message-format=json"])
+					.args(self.command.as_ref().as_ref());
+				command
+			}
+		}
+		.stdin(Stdio::null())
+		.stderr(Stdio::inherit())
+		.output()
 	}
 }
 
@@ -162,12 +222,16 @@ enum CliCommand {
 	Clippy(CliCommandArgs),
 	/// Runs `cargo build` and annotates from its output
 	Build(CliCommandArgs),
+	/// Runs `cargo fmt` and annotates from its output
+	///
+	/// WARNING: This requires a nightly toolchain!
+	Fmt(CliCommandArgs),
 }
 impl AsRef<CliCommandArgs> for CliCommand {
 	#[inline]
 	fn as_ref(&self) -> &CliCommandArgs {
 		match self {
-			Self::Check(args) | Self::Clippy(args) | Self::Build(args) => args,
+			Self::Check(args) | Self::Clippy(args) | Self::Build(args) | Self::Fmt(args) => args,
 		}
 	}
 }
@@ -189,110 +253,6 @@ impl AsRef<[OsString]> for CliCommandArgs {
 	fn as_ref(&self) -> &[OsString] {
 		self.args.as_ref()
 	}
-}
-
-/// Summary of [`CargoMessage`]
-#[derive(Debug, Clone)]
-enum Summary {
-	/// Summary of [`Diagnostic`]
-	Diagnostic {
-		/// [`Diagnostic.level`](Diagnostic#structfield.level)
-		level: DiagnosticLevel,
-		/// [`Diagnostic.message`](Diagnostic#structfield.message)
-		message: String,
-		/// Location of the diagnostic (primary [span](cargo::DiagnosticSpan))
-		location: Option<(String, usize)>,
-	},
-}
-impl<'c> From<&'c Diagnostic<'c>> for Summary {
-	#[inline]
-	fn from(message: &'c Diagnostic<'c>) -> Self {
-		Self::Diagnostic {
-			level: message.level,
-			message: message.message.to_owned(),
-			location: message.spans.iter().find_map(|span| {
-				span.is_primary
-					.then(|| (span.file_name.to_owned(), span.line_start))
-			}),
-		}
-	}
-}
-impl<'c> From<&'c CargoMessage<'c>> for Summary {
-	#[inline]
-	fn from(message: &'c CargoMessage<'c>) -> Self {
-		match message {
-			CargoMessage::CompilerMessage(message) => Self::from(message),
-		}
-	}
-}
-
-/// Writes a summary of the job in the special summary file
-fn write_summaries(summaries: Vec<Summary>) -> io::Result<()> {
-	/// Environment variable containing the path to the special summary file
-	const SUMMARY_PATH_VAR: &str = "GITHUB_STEP_SUMMARY";
-	let Some(path) = std::env::var_os(SUMMARY_PATH_VAR)
-		.or(cfg!(debug_assertions).then(|| OsString::from("SUMMARY.md")))
-		else {
-			return Ok(());
-		};
-	let mut file = File::create(path)?;
-
-	let diagnostics = summaries
-		.iter()
-		.filter(|summary| matches!(summary, Summary::Diagnostic { .. }))
-		.collect::<Vec<_>>();
-	if !diagnostics.is_empty() {
-		write_diagnostic_summary(diagnostics, &mut file)?;
-	}
-
-	Ok(())
-}
-
-/// Write a summary of the [`Diagnostic`](Summary::Diagnostic) items
-fn write_diagnostic_summary<'s>(
-	diagnostics: impl IntoIterator<Item = &'s Summary>,
-	file: &mut File,
-) -> io::Result<()> {
-	writeln!(file, "# Diagnostics")?;
-
-	let mut kind_count: HashMap<AnnotationKind, usize> = HashMap::new();
-	let mut table = String::new();
-	writeln!(table, "|Level|Message|Location|").unwrap();
-	writeln!(table, "|:--|:--|--:|").unwrap();
-	for summary in diagnostics {
-		let Summary::Diagnostic { level, message, location } = summary else {
-			unreachable!()
-		};
-		let kind = AnnotationKind::from(*level);
-		*kind_count.entry(kind).or_default() += 1;
-		let location = location
-			.as_ref()
-			.map(|location| format!("`{}:{}`", location.0, location.1))
-			.unwrap_or_default();
-		writeln!(table, "|{kind}|{message}|{location}|").unwrap();
-	}
-
-	writeln!(
-		file,
-		"> **TOTAL:** {} {}s, {} {}s, {} {}s",
-		kind_count
-			.get(&AnnotationKind::Error)
-			.copied()
-			.unwrap_or_default(),
-		AnnotationKind::Error,
-		kind_count
-			.get(&AnnotationKind::Warning)
-			.copied()
-			.unwrap_or_default(),
-		AnnotationKind::Warning,
-		kind_count
-			.get(&AnnotationKind::Notice)
-			.copied()
-			.unwrap_or_default(),
-		AnnotationKind::Notice,
-	)?;
-	writeln!(file)?;
-	file.write_all(table.as_bytes())
 }
 
 #[cfg(test)]
