@@ -29,6 +29,7 @@ jobs:
         uses: Dragonink/cargo-ghannotate@master
         with:
           command: clippy --workspace --all-targets --all-features
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   format:
     name: Check Rust code formatting
@@ -46,3 +47,4 @@ jobs:
         uses: Dragonink/cargo-ghannotate@master
         with:
           command: fmt --all
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

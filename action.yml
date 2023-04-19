@@ -4,6 +4,7 @@ description: Installs `cargo-ghannotate` and runs the specified Cargo command th
 branding:
   icon: check-circle
   color: orange
+
 inputs:
   command:
     description: Cargo command to run
@@ -12,14 +13,22 @@ inputs:
     description: Allow the job to succeed if there are warnings
     required: false
     default: 'false'
+  GITHUB_TOKEN:
+    description: GitHub token to use GitHub CLI
+    required: true
+
 runs:
   using: composite
   steps:
-    - run: cargo install --git https://github.com/Dragonink/cargo-ghannotate --tag v1
+    - run: |
+        gh release download --repo Dragonink/cargo-ghannotate --output cargo-ghannotate --pattern 'cargo-ghannotate.x86_64-unknown-linux-musl'
+        chmod +x cargo-ghannotate
       shell: bash
-    - run: cargo ghannotate ${{ inputs.command }}
+      env:
+        GITHUB_TOKEN: ${{ inputs.GITHUB_TOKEN }}
+    - run: ./cargo-ghannotate --cargo cargo ${{ inputs.command }}
       shell: bash
       if: ${{ inputs.allow-warnings == 'false' }}
-    - run: cargo ghannotate --allow-warnings ${{ inputs.command }}
+    - run: ./cargo-ghannotate --cargo cargo --allow-warnings ${{ inputs.command }}
       shell: bash
       if: ${{ inputs.allow-warnings != 'false' }}
