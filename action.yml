@@ -15,7 +15,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - run: cargo install --git https://github.com/Dragonink/cargo-ghannotate
+    - run: cargo install --git https://github.com/Dragonink/cargo-ghannotate --tag v1
       shell: bash
     - run: cargo ghannotate ${{ inputs.command }}
       shell: bash
