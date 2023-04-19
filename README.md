@@ -5,7 +5,7 @@ and creates annotations from them.
 
 ## Action usage
 
-Include a step with **`uses: Dragonink/cargo-ghannotate@v1.0.0`** in your workflow.
+Include a step with **`uses: Dragonink/cargo-ghannotate@v1`** in your workflow.
 
 > **WARNING: This action does *not* install a Rust toolchain!**
 > You need to call another action (like [`actions-rs/toolchain`](https://github.com/actions-rs/toolchain)) before to install a Rust toolchain with Cargo.
@@ -20,7 +20,7 @@ cargo <command> [arguments]...
 ```
 Then the step in your workflow should look like:
 ```yaml
-- uses: Dragonink/cargo-ghannotate@v1.0.0
+- uses: Dragonink/cargo-ghannotate@v1
   with:
     command: <command> [arguments]...
 ```
@@ -28,10 +28,11 @@ Currently supported Cargo commands:
 - `check`
 - `clippy`
 - `build`
+- `fmt` (requires a *nightly* toolchain)
 
 For example:
 ```yaml
-- uses: Dragonink/cargo-ghannotate@v1.0.0
+- uses: Dragonink/cargo-ghannotate@v1
   with:
     command: clippy --workspace --all-targets --all-features
 ```
@@ -50,6 +51,7 @@ This allows the job to fail if a warning occurs (even without options like `-D w
 cargo ghannotate check [cargo-check ARGS]...
 cargo ghannotate clippy [cargo-clippy ARGS]...
 cargo ghannotate build [cargo-build ARGS]...
+cargo ghannotate fmt [cargo-fmt ARGS]...
 ```
 
 > It is recommended to invoke this program as a Cargo third-party command (`cargo ghannotate`).

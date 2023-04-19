@@ -29,3 +29,20 @@ jobs:
         uses: Dragonink/cargo-ghannotate@master
         with:
           command: clippy --workspace --all-targets --all-features
+
+  format:
+    name: Check Rust code formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          components: rustfmt
+      - name: Check Rust code formatting with rustfmt
+        uses: Dragonink/cargo-ghannotate@master
+        with:
+          command: fmt --all
